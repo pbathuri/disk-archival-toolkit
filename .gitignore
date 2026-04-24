@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.env
+.env.local
+.DS_Store
+*.csv
+!example_inventory.csv
+*.log
