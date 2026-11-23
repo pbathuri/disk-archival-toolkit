@@ -18,30 +18,87 @@ Safety:
   - Refuses to move a file that already lives under --dest-root.
   - Refuses if --dest-root lies inside a source path (misconfiguration).
   - Name collisions in the destination get a numeric suffix before the extension.
+  - Copy uses file data only (no rich metadata) so exFAT/FAT32 volumes do not hit EINVAL from xattrs.
+  - Filenames are sanitized for portable disks (exFAT): odd Unicode spaces, ?, *, :, etc.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import re
 import shutil
 import sys
+import unicodedata
 from pathlib import Path
 
-from drive_client import safe_drive_name
-
 PROJECT_DIR = Path(__file__).resolve().parent
+
+# exFAT / cross-platform: narrow NBSP, BOM, other exotic spaces, control chars, Windows-forbidden.
+_EXOTIC_SPACE = str.maketrans(
+    {c: " " for c in "\u202f\u00a0\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
+     "\u2008\u2009\u200a\u200b\u200c\u200d\ufeff\u2060\u180e\n\r\t\v\f"}
+)
+# macOS+exFAT also rejects * ? " < > | \ / and colon in some APIs; = & [ ] are risky
+_FORBID_FILENAME = re.compile(r"[\x00-\x1f\x7f\"*/:<>?\\|]")
+
+
+def safe_portable_filename(name: str, max_basename: int = 180) -> str:
+    """Name safe for exFAT/FAT32 and precomposed UTF-8 on macOS."""
+    s = unicodedata.normalize("NFC", (name or "").strip())
+    s = s.translate(_EXOTIC_SPACE)
+    s = s.replace(":", " -")
+    s = s.replace("?", " ")
+    s = s.replace("*", " ")
+    s = s.replace("[", "(").replace("]", ")")
+    s = s.replace("&", " and ")
+    s = s.replace("=", "-")
+    s = _FORBID_FILENAME.sub("_", s)
+    s = re.sub(r"\.+$", "", s)
+    s = s.rstrip(" .")
+    s = re.sub(r"\s+", " ", s, flags=re.UNICODE).strip() or "unnamed"
+    # Basename + extension length cap (exFAT: 255 UTF-16 units; cap chars conservatively)
+    p = Path(s)
+    ext = p.suffix
+    stem = p.stem
+    if len(s) > max_basename and max_basename > len(ext) + 1:
+        take = max_basename - len(ext)
+        if take > 0:
+            s = (stem[:take] + ext)[:max_basename]
+    if s in (".", "..", "") or not s.strip():
+        s = f"file_{hashlib.sha256(name.encode('utf-8', errors='replace')).hexdigest()[:16]}"
+    return s
 
 
 def project_slug(git_repo_root: str) -> str:
     if not git_repo_root.strip():
         return "_no_project"
-    return safe_drive_name(Path(git_repo_root).name, max_len=80)
+    n = safe_portable_filename(Path(git_repo_root).name, max_basename=80)
+    return n or "_no_project"
+
+
+def _safe_ym_cat(seg: str, default: str) -> str:
+    t = safe_portable_filename((seg or "").strip() or default, max_basename=64)
+    t = t.replace(" ", "_")
+    return t or default
+
+
+def copy_file_then_unlink_source(src: Path, dst: Path) -> None:
+    """Write file data then delete source. Avoids shutil.copy2 / move xattr + metadata paths that
+    often return Errno 22 (EINVAL) when the destination is exFAT and the source is APFS."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst, follow_symlinks=True)
+    try:
+        shutil.copystat(src, dst, follow_symlinks=True)
+    except OSError:
+        pass
+    src.unlink()
 
 
 def unique_dest_path(dest_dir: Path, filename: str) -> Path:
     """Pick dest_dir / filename, or dest_dir / name (n).ext if taken."""
-    base = safe_drive_name(filename, max_len=200)
+    base = safe_portable_filename(filename, max_basename=200)
     candidate = dest_dir / base
     if not candidate.exists():
         return candidate
@@ -225,22 +282,22 @@ def main() -> int:
                 log_rows.append((path_s, "", f"skip:unsafe:{bad}"))
                 continue
 
-            ym = (row.get("mtime_year_month") or "").strip() or "unknown_ym"
-            cat = (row.get("file_category") or "other").strip() or "other"
+            ym = _safe_ym_cat((row.get("mtime_year_month")
+                              or "").strip(), "unknown_ym")
+            cat = _safe_ym_cat(
+                (row.get("file_category") or "").strip(), "other")
             proj = project_slug(row.get("git_repo_root") or "")
             dest_dir = dest_root / ym / cat / proj
 
             n_plan += 1
-            safe_name = safe_drive_name(local.name, max_len=200)
-            final_path = unique_dest_path(dest_dir, safe_name)
+            final_path = unique_dest_path(dest_dir, local.name)
 
             if not args.execute:
                 print(f"[dry-run] {path_s} -> {final_path}")
                 log_rows.append((path_s, str(final_path), "dry_run"))
             else:
                 try:
-                    dest_dir.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(local), str(final_path))
+                    copy_file_then_unlink_source(local, final_path)
                     print(f"OK {path_s} -> {final_path}")
                     log_rows.append((path_s, str(final_path), "ok"))
                     n_moved += 1

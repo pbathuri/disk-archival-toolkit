@@ -1,11 +1,26 @@
+.env
+.venv/
+client_secret*.json
+credentials.json
+token.json
+# Added by code-review-graph
+.code-review-graph/
+
+# local state — never publish (personal file paths, logs, editor/agent state)
+*.csv
+Map_Projects_MAC/
+keep_local.txt
+.pce/
+.cursor/
+.cursorrules
+.claude/
+.code-review-graph-bulk*
+.DS_Store
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-.venv/
-.env
 .env.local
-.DS_Store
-*.csv
-!example_inventory.csv
 *.log
+!example_inventory.csv
+AGENTS.md

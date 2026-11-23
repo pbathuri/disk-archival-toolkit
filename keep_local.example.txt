@@ -1,0 +1,3 @@
+# Copy to keep_local.txt. Paths `darc plan` will never propose (one prefix per line).
+~/Desktop/my-active-project
+~/Code

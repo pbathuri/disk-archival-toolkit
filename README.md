@@ -106,3 +106,22 @@ MIT
 <div align="center">
 <sub>Part of <a href="https://github.com/pbathuri">@pbathuri</a>'s <a href="https://github.com/pbathuri/Map_Projects_MAC">project portfolio</a> - HPC tooling.</sub>
 </div>
+
+## `darc` — folder-level tiering to an external drive
+
+`scan.py` / `audit_upload_plan.py` work file by file. `darc.py` is the day-to-day layer on top: it moves
+whole cold folders from `~` to an external drive (default `/Volumes/Optometry`, override with `DARC_DRIVE`),
+mirroring paths under `Mac_Archive/` and appending every action to `Mac_Archive/MANIFEST.txt`.
+
+```bash
+darc status            # Mac + drive free space, recent moves   (--brief: silent unless < 50 GB free)
+darc plan --days 21    # cold, large folders ranked by size; skips paths in keep_local.txt
+darc move PATH         # verified copy (per-file size check) → delete local
+darc move PATH --link  # …and leave a symlink so scripts still find the data when the drive is plugged in
+darc move PATH --tar   # code trees: tar keeps symlinks/exec bits that exFAT drops
+darc restore PATH      # bring it back (drive copy kept)
+darc find TEXT         # search the manifest
+```
+
+Nothing local is deleted unless every file matches on the drive (or the tar entry count matches).
+Install: `ln -s "$PWD/darc.py" ~/.local/bin/darc`; copy `keep_local.example.txt` to `keep_local.txt`.
